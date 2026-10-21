@@ -29,6 +29,8 @@ the explanation, a live step / phase / uprightness readout, a red marker on the 
 cause, page with **Next 4 / Prev 4**, pause and scrub. Type your diagnosis in the box under a clip: notes are saved to
 `exports/notes.json` (case id, board, peg, your text) so Claude can read them and turn them into fixes. "open in lab" opens that
 exact case in the interactive lab.
+**⇆ Compare with c053** plays each case twice side by side: c053 (as scored) on the left, the policy chosen in the selector on
+the right (e.g. **c054 (your fixes)**), so you see exactly what a fix changes. Open it directly with `movies.html?compare=1`.
 
 ## Dashboard
 

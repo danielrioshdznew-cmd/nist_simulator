@@ -46,6 +46,7 @@
   <h1>Failure movies</h1>
   <select id="cat"></select>
   policy <select id="policy"></select>
+  <button id="cmp" title="each case twice: c053 on the left, the chosen policy on the right">⇆ Compare with c053</button>
   <button id="prev">◀ Prev 4</button><span id="page" class="dim"></span><button id="next">Next 4 ▶</button>
   <button id="play" class="on">❚❚ Pause</button>
   speed <select id="speed"><option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
@@ -166,24 +167,36 @@ async function saveNote(T) {
 }
 
 // ---------- paging + playback ----------
-let cases = [], page = 0, frame = 0, playing = true, maxN = 100;
+let cases = [], page = 0, frame = 0, playing = true, maxN = 100, compare = new URLSearchParams(location.search).get('compare') === '1';
+const per = () => (compare ? 2 : 4);
 async function loadPage() {
-  const ids = cases.slice(page * 4, page * 4 + 4).map((c) => c.id);
-  $('page').textContent = cases.length ? `cases ${page * 4 + 1}-${Math.min(cases.length, page * 4 + 4)} of ${cases.length}` : 'no cases';
-  tiles.forEach((T, i) => { T.el.style.visibility = i < ids.length ? 'visible' : 'hidden'; T.el.querySelector('.loading').style.display = 'flex'; });
+  const n = per();
+  const ids = cases.slice(page * n, page * n + n).map((c) => c.id);
+  $('page').textContent = cases.length ? `cases ${page * n + 1}-${Math.min(cases.length, page * n + n)} of ${cases.length}` : 'no cases';
+  const nt = compare ? ids.length * 2 : ids.length;
+  tiles.forEach((T, i) => { T.el.style.visibility = i < nt ? 'visible' : 'hidden'; T.el.querySelector('.loading').style.display = 'flex'; });
   if (!ids.length) return;
-  const r = await api('clips', { ids, before: 75, after: 75, policy: $('policy').value || undefined });
-  r.clips.forEach((clip, i) => loadTile(tiles[i], clip));
-  maxN = Math.max(...r.clips.map((c) => c.steps.length), 1);
+  let clips;
+  if (compare) {        // left column = c053 as scored, right column = the chosen policy, same case per row
+    const [a, b] = await Promise.all([api('clips', { ids, before: 75, after: 75, policy: 'c053' }),
+                                      api('clips', { ids, before: 75, after: 75, policy: $('policy').value || undefined })]);
+    clips = []; ids.forEach((_, i) => { clips.push(a.clips[i], b.clips[i]); });
+  } else {
+    clips = (await api('clips', { ids, before: 75, after: 75, policy: $('policy').value || undefined })).clips;
+  }
+  clips.forEach((clip, i) => loadTile(tiles[i], clip));
+  maxN = Math.max(...clips.map((c) => c.steps.length), 1);
   $('scrub').max = maxN - 1; frame = 0;
+  $('next').textContent = `Next ${n} ▶`; $('prev').textContent = `◀ Prev ${n}`;
 }
+$('cmp').onclick = () => { compare = !compare; $('cmp').classList.toggle('on', compare); page = 0; loadPage(); };
 async function loadCat() {
   const r = await api('cases', { cause: $('cat').value });
   cases = r.cases.filter((c) => c.fail_step !== null).concat(r.cases.filter((c) => c.fail_step === null));
   page = 0; await loadPage();
 }
 $('cat').onchange = loadCat;
-$('next').onclick = () => { if ((page + 1) * 4 < cases.length) { page++; loadPage(); } };
+$('next').onclick = () => { if ((page + 1) * per() < cases.length) { page++; loadPage(); } };
 $('prev').onclick = () => { if (page > 0) { page--; loadPage(); } };
 $('play').onclick = () => { playing = !playing; $('play').textContent = playing ? '❚❚ Pause' : '▶ Play'; $('play').classList.toggle('on', playing); };
 $('scrub').oninput = () => { frame = +$('scrub').value; playing = false; $('play').textContent = '▶ Play'; $('play').classList.remove('on'); };
@@ -202,8 +215,10 @@ function loop(now) {
   notes = (await api('notes')).notes || {};
   const pl = await api('policies');
   const wantP = new URLSearchParams(location.search).get('policy');
-  $('policy').innerHTML = pl.policies.map((n) => `<option value="${n}">${n === 'c053' ? 'c053 (as scored)' : n}</option>`).join('');
-  $('policy').value = wantP && pl.policies.includes(wantP) ? wantP : pl.current;
+  $('policy').innerHTML = pl.policies.map((n) => `<option value="${n}">${n === 'c053' ? 'c053 (as scored)' : n === 'c054_userfixes' ? 'c054 (your fixes)' : n}</option>`).join('');
+  const newest = pl.policies.filter((p) => p !== 'c053').sort().pop();
+  $('policy').value = wantP && pl.policies.includes(wantP) ? wantP : (compare && newest ? newest : pl.current);
+  $('cmp').classList.toggle('on', compare);
   $('policy').onchange = () => loadPage();
   const s = await api('categories');
   const want = new URLSearchParams(location.search).get('cat');

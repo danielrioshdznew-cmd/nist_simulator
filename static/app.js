@@ -340,7 +340,7 @@ resize(); loop(); showAct();
 (async () => {
   const p = await api('policies');
   const want = new URLSearchParams(location.search).get('policy');
-  $('policy').innerHTML = p.policies.map((n) => `<option value="${n}">${n === 'c053' ? 'c053 (as scored)' : n}</option>`).join('');
+  $('policy').innerHTML = p.policies.map((n) => `<option value="${n}">${n === 'c053' ? 'c053 (as scored)' : n === 'c054_userfixes' ? 'c054 (your fixes)' : n}</option>`).join('');
   $('policy').value = want && p.policies.includes(want) ? want : p.current;
   $('policy').onchange = () => (cur ? gotoStep(cur.goto) : $('reset').onclick());
   await $('reset').onclick();
