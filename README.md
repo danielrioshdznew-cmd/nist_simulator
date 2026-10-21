@@ -24,7 +24,7 @@ Options: `--port N`, `--host 0.0.0.0` (reach it from another machine), `--policy
 ## Failure movies
 
 **http://127.0.0.1:8765/movies.html** shows **four failure cases at once, playing like videos in sync**, from ~3 s before each
-failure to ~1 s after it, looping. Each clip is labelled with its case number and cause, board, peg and failure step, and carries
+failure to ~3 s after it, looping (if the failure ends the episode, the clip stops there and says so). Each clip is labelled with its case number and cause, board, peg and failure step, and carries
 the explanation, a live step / phase / uprightness readout, a red marker on the failing peg and a **FAILS NOW** flash. Choose a
 cause, page with **Next 4 / Prev 4**, pause and scrub. Type your diagnosis in the box under a clip: notes are saved to
 `exports/notes.json` (case id, board, peg, your text) so Claude can read them and turn them into fixes. "open in lab" opens that

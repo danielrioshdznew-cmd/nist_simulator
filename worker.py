@@ -180,7 +180,7 @@ class Lab:
         start = cs.get("first_targeted") or 0
         return start, start + before + after
 
-    def clips(self, ids, before=75, after=25):
+    def clips(self, ids, before=75, after=75):
         """Movies of failure cases: each is simulated from step 0 with the policy (exactly as scored) and recorded from
         `before` steps ahead of its failure to `after` steps past it. Several cases run together, sharing each policy call."""
         self._load_cases()
