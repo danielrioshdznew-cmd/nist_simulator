@@ -36,6 +36,11 @@ P2G_XY = float(os.environ.get("RF_P2G_XY", "0.0015"))
 PARK_LAST = os.environ.get("RF_PARK_LAST", "0") == "1"  # user: standing pegs first; park lying round pegs only once none are left
 PARK_CHASE = float(os.environ.get("RF_PARK_CHASE", "-1"))  # user: catch a rolling peg fast: aim at its latest position + this x
                                                          #   (latest - smoothed) as a lead in its rolling direction (-1 = off)
+PARK_CATCH = float(os.environ.get("RF_PARK_CATCH", "0"))  # user: catch a rolling peg fast: start lowering within this xy distance
+CATCH_ARR = float(os.environ.get("RF_CATCH_ARR", "0.005"))  #   and accept arrival within this xy / CATCH_YAW yaw (jaws wide open)
+CATCH_YAW = float(os.environ.get("RF_CATCH_YAW", "0.2"))
+PARK_SETDOWN = os.environ.get("RF_PARK_SETDOWN", "0") == "1"  # user: lying round pegs first, even when the episode starts with a
+                                                         #   peg in the hand: set that peg down upright where it is, park, come back
 TILT_GRIP = os.environ.get("RF_TILT_GRIP", "0") == "1"  # user (#262 #35 #40): a leaning peg: aim at its top, jaws closing ALONG the lean,
 TG_AZ = float(os.environ.get("RF_TG_AZ", "0.97"))        #   so the two vertical pads push it upright as they close (pivot on its foot)
 RELMIN = float(os.environ.get("RF_RELMIN", "0"))         # user (#30 #197): release by opening only to dia + RELMIN (not +PREOPEN):
@@ -1001,11 +1006,23 @@ def policy(F, obs):
                 (F.sqrt((gpx - hx) * (gpx - hx) + (gpy - hy) * (gpy - hy)) < 0.0015) & (F.abs(hz - zg) < 0.002) & (cc_shift < 0.0002)
     if PARK:
         a1 = [servo(ggx, hx, 1.0), servo(ggy, hy, 1.0), servo(PARK_APPZ + zero, hz, 1.0), yservo(yaw_l, 1.0), open_l]
+        if PARK_CATCH > 0:        # rolling peg: descend while closing in, jaws wide; hand over to P2 as soon as roughly there
+            dxy_c = F.maximum(F.abs(ggx - hx), F.abs(ggy - hy))
+            a1 = [a1[0], a1[1], servo(F.where(dxy_c < PARK_CATCH, zg_c, PARK_APPZ + zero), hz, 1.0), a1[3], a1[4]]
         acts[P1] = [F.where(park_cur, x1, x0) for x1, x0 in zip(a1, acts[P1])]
-        nxt[P1] = (park_cur & (arrived_l(ggx, ggy, PARK_APPZ + zero, yaw_l) | (cnt > TMAX))) | (~park_cur & nxt[P1])
+        if PARK_CATCH > 0:
+            p1_ok = (dxy_c < CATCH_ARR) & (F.abs(_wrap(F, yaw_l - hyaw)) < CATCH_YAW)
+            nxt[P1] = (park_cur & (p1_ok | (cnt > TMAX))) | (~park_cur & nxt[P1])
+        else:
+            nxt[P1] = (park_cur & (arrived_l(ggx, ggy, PARK_APPZ + zero, yaw_l) | (cnt > TMAX))) | (~park_cur & nxt[P1])
         a2 = [servo(ggx, hx, PARK_S2), servo(ggy, hy, PARK_S2), servo(zg_c, hz, PARK_S2), yservo(yaw_l, PARK_S2), open_l]
         acts[P2] = [F.where(park_cur, x1, x0) for x1, x0 in zip(a2, acts[P2])]
-        nxt[P2] = (park_cur & (arrived_l(ggx, ggy, zg_c, yaw_l) | (cnt > TMAX))) | (~park_cur & nxt[P2])
+        if PARK_CATCH > 0:
+            p2_ok = (F.maximum(F.abs(ggx - hx), F.abs(ggy - hy)) < CATCH_ARR) & (F.abs(zg_c - hz) < 0.0015) & \
+                (F.abs(_wrap(F, yaw_l - hyaw)) < CATCH_YAW)
+            nxt[P2] = (park_cur & (p2_ok | (cnt > TMAX))) | (~park_cur & nxt[P2])
+        else:
+            nxt[P2] = (park_cur & (arrived_l(ggx, ggy, zg_c, yaw_l) | (cnt > TMAX))) | (~park_cur & nxt[P2])
     # P3 close 12
     acts[P3] = [zero, zero, zero, zero, zero - 1.0]
     nxt[P3] = cnt > P3_N
@@ -1190,6 +1207,11 @@ def policy(F, obs):
                     F.where(kd_low, servo(dz_c, hz, 1.0), F.where(kd_open, 0.0, 1.0)), F.where(kd_low, yservo(yaw_b, 1.0), 0.0),
                     F.where(kd_low, -1.0, 1.0)]
         nxt[KD] = cnt > KD_LOW + KD_OPEN + KD_RISE - 2.5
+        if PARK_SETDOWN:          # KD on an UPRIGHT held peg = set it down: lower in place until its foot is 1 mm over the board,
+            sd_ = ~park_cur       # open, rise; then NEXT parks the lying round pegs (the hand is free) and picks this one later
+            z_sd = hz + (BLOCK_H + 0.001 - bottom)
+            a_sd = [zero, zero, F.where(kd_low, servo(z_sd, hz, 1.0), F.where(kd_open, 0.0, 1.0)), zero, F.where(kd_low, -1.0, 1.0)]
+            acts[KD] = [F.where(sd_, x1, x0) for x1, x0 in zip(a_sd, acts[KD])]
 
     # IDLE: rise to 80 mm, then hold still (effort term)
     acts[IDLE] = [zero, zero, F.where(hz < 0.08, 0.2, 0.0), zero, (GTRANS + zero) if GTRANS > 0 else one]
@@ -1197,6 +1219,11 @@ def policy(F, obs):
 
     # NEXT resolves within the same step: a held start goes to I0, an upright peg to P1, nothing left to IDLE
     start_phase = F.where(~any_new, float(IDLE), F.where(held_start, float(I0), float(P1)))
+    if PARK and PARK_SETDOWN:     # held at the start while a lying round peg could roll off: set the held one down first
+        lr_any = zero > 1.0
+        for r in rows:
+            lr_any = lr_any | r["pk_cand"]
+        start_phase = F.where(~any_new, float(IDLE), F.where(held_start, F.where(lr_any, float(KD), float(I0)), float(P1)))
     phase_eff = F.where(at_next | (ph(IDLE) & any_new), start_phase, phase)
     cnt_eff = F.where(at_next | (ph(IDLE) & any_new), 0.0, cnt)
     if BANDCNT:
