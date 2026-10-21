@@ -1,7 +1,6 @@
 .venv/
 apex-competition-nist-assembly
 apex-competition-nist-assembly/
-exports/
 cache/
 __pycache__/
 *.pyc
