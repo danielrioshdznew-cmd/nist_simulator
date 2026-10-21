@@ -193,6 +193,26 @@ class Lab:
         start = cs.get("first_targeted") or 0
         return start, start + before + after
 
+    def _own(self, r, pkey):
+        """This clip's own outcome for the case's peg: c053 = the census; any other policy = what happened in its run."""
+        cs, e = r["cs"], r["e"]
+        lab = dict(cases_lib.CATS)[cs["cat"]]
+        if pkey == "c053":
+            return {"fixed": False, "fail_step": cs["fail_step"], "why": lab}
+        k = cs["peg"]
+        if e.peg_seated_at_end()[k]:
+            return {"fixed": True, "fail_step": None, "seated_step": e.peg_first_seat_steps()[k],
+                    "why": f"peg {k} seated in its own hole and still seated at the end"}
+        if e.terminal_reason == "part_lost":
+            p, _ = e.peg_pose(k)
+            off = abs(p[0]) > 0.30 or abs(p[1]) > 0.30 or p[2] < -0.01
+            return {"fixed": False, "fail_step": int(e.steps),
+                    "why": "this peg fell off the board, which ends the episode" if off else
+                           "another peg fell off the board, which ended the episode before this one was seated"}
+        if r["tip"] is not None:
+            return {"fixed": False, "fail_step": r["tip"], "why": f"peg {k} fell over at step {r['tip']} and was never seated"}
+        return {"fixed": False, "fail_step": int(e.steps), "why": f"peg {k} not seated when time ran out (step {int(e.steps)})"}
+
     def clips(self, ids, before=75, after=75, policy=None, full=False):
         """Movies of failure cases: each is simulated from step 0 with the policy (exactly as scored) and recorded from
         `before` steps ahead of its failure to `after` steps past it. Several cases run together, sharing each policy call."""
@@ -217,17 +237,26 @@ class Lab:
             names = [mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, int(m.geom_bodyid[g])) or "" for g in range(m.ngeom)]
             dyn = [g for g, b in enumerate(names) if b.startswith(("peg", "clutter")) or b in ("hand", "fl", "fr")]
             a, b = (0, int(c.max_steps)) if full else self._window(cs, before, after)
-            runs.append({"i": i, "cs": cs, "c": c, "e": e, "noise": r2, "dyn": dyn, "a": a, "b": min(b, int(c.max_steps)),
-                         "frames": [], "steps": [], "phases": [], "targets": [], "az": [], "touch": [], "pos": [], "static": None})
+            # c053's outcome is the census; any other policy runs to the episode's end so the clip knows its own result
+            run_to = int(c.max_steps) if (full or pkey != "c053") else min(b, int(c.max_steps))
+            runs.append({"i": i, "cs": cs, "c": c, "e": e, "noise": r2, "dyn": dyn, "a": a, "b": min(b, int(c.max_steps)), "run_to": run_to,
+                         "frames": [], "steps": [], "phases": [], "targets": [], "az": [], "touch": [], "pos": [], "static": None,
+                         "up": False, "tip": None})
         while True:
-            live = [r for r in runs if not r["e"].done and r["e"].steps <= r["b"]]
+            live = [r for r in runs if not r["e"].done and r["e"].steps <= r["run_to"]]
             if not live:
                 break
             obs = np.round(np.stack([r["e"].observe(r["noise"]) for r in live]), 6).astype(np.float32)
             acts = sess.run(None, {"obs": obs})[0]
             for r, act in zip(live, acts):
                 e = r["e"]
-                if e.steps >= r["a"]:
+                _, q_ = e.peg_pose(r["cs"]["peg"])
+                az_ = abs(1 - 2 * (float(q_[1]) ** 2 + float(q_[2]) ** 2))
+                if az_ > 0.9:
+                    r["up"] = True
+                elif az_ < 0.5 and r["up"]:          # was upright, now over: this policy's own tip-over (the last one counts)
+                    r["up"], r["tip"] = False, int(e.steps)
+                if r["a"] <= e.steps <= r["b"]:
                     d = e.data
                     if r["static"] is None:
                         r["static"] = np.concatenate([d.geom_xpos, d.geom_xmat], axis=1).astype(np.float32)
@@ -249,12 +278,15 @@ class Lab:
                     "static": base64.b64encode(r["static"].tobytes()).decode() if r["static"] is not None else None,
                     "dyn": r["dyn"], "frames": base64.b64encode(np.stack(r["frames"]).tobytes()).decode() if r["frames"] else None,
                     "steps": r["steps"], "phases": r["phases"], "targets": r["targets"], "az": r["az"], "touch": r["touch"],
-                    "pos": r["pos"], "end": r["e"].terminal_reason if r["e"].done else "running"}
-            if r["e"].done:                 # final result of the whole episode (full-episode movies)
-                e_ = r["e"]
+                    "pos": r["pos"], "end": "running"}
+            e_ = r["e"]
+            if e_.done and r["steps"] and r["steps"][-1] >= e_.steps - 1:   # the recording reaches the episode's end
+                clip["end"] = e_.terminal_reason
+            if e_.done:                     # final result of the whole episode
                 seated, first = e_.peg_seated_at_end(), e_.peg_first_seat_steps()
                 clip["final"] = {"score": round(episode_score(seated, first, r["c"].max_steps, e_.action_l2 / max(1, e_.steps)), 3),
                                  "seated": int(sum(seated)), "k": len(seated), "step": int(e_.steps)}
+            clip["own"] = self._own(r, pkey)
             clip["policy"] = pkey
             self.clip_cache[(r["i"], int(before), int(after), pkey, bool(full))] = clip
             out[r["i"]] = clip

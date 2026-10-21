@@ -21,6 +21,9 @@
   .tile { display:flex; flex-direction:column; background:var(--panel); border:2px solid var(--line); border-radius:8px; overflow:hidden; min-height:0; }
   .tile.failnow { border-color:var(--bad); box-shadow:0 0 0 3px #ff4d4d55; }
   .tile.failed { border-color:#7a2a2a; }
+  .tile.fixed { border-color:var(--ok); }
+  .badge { position:absolute; right:8px; top:6px; background:var(--ok); color:#06210f; font-weight:700; padding:3px 8px; border-radius:5px; display:none; pointer-events:none; }
+  .verdict.ok { color:var(--ok); font-weight:650; } .verdict.bad { color:var(--bad); font-weight:650; }
   .head { padding:6px 9px 4px; border-bottom:1px solid var(--line); }
   .name { font-weight:650; font-size:13.5px; } .name .num { color:var(--warn); margin-right:6px; }
   .sub { color:var(--dim); font-size:12px; }
@@ -91,7 +94,7 @@ const tiles = [];
 for (let t = 0; t < 4; t++) {
   const el = document.createElement('div'); el.className = 'tile';
   el.innerHTML = `<div class="head"><div class="name"></div><div class="sub"></div></div><div class="why" title="click to expand"></div>
-    <div class="view"><div class="hud"></div><div class="flash">FAILS NOW</div><div class="ended"></div><div class="loading">simulating…</div></div>
+    <div class="view"><div class="hud"></div><div class="flash">FAILS NOW</div><div class="badge">FIXED</div><div class="ended"></div><div class="loading">simulating…</div></div>
     <div class="foot"><textarea placeholder="Why does it fail, and how would you fix it? (saved for Claude)"></textarea>
       <div class="side"><a class="lab" target="_blank">open in lab ↗</a><span class="saved"></span></div></div>`;
   $('grid').append(el);
@@ -117,12 +120,19 @@ function resize() { tiles.forEach((T) => { const w = T.view.clientWidth, h = T.v
 addEventListener('resize', resize);
 
 function loadTile(T, clip) {
-  T.clip = clip; T.world.clear(); T.el.classList.remove('failnow', 'failed');
+  T.clip = clip; T.world.clear(); T.el.classList.remove('failnow', 'failed', 'fixed');
   const c = clip.case;
+  // the case = a peg c053 did not get seated; each tile marks ITS OWN policy's result (c053 = the census, others = their own run)
+  const own = clip.own || { fixed: false, fail_step: c.fail_step, why: clip.label };
+  const base = clip.policy === 'c053';
+  T.own = own;
+  T.el.classList.toggle('fixed', !!own.fixed);
   T.el.querySelector('.name').innerHTML = `<span class="num">#${c.id}</span>${clip.label} <span class="dim" style="font-weight:400">· ${clip.policy}</span>`;
-  T.el.querySelector('.sub').textContent = `board ${c.seed}/${c.episode} · peg ${c.peg} · ${c.shape} ${c.dia_mm} mm · start ${c.start} · ` +
-    (c.fail_step !== null ? `fails at step ${c.fail_step}` : `episode ${c.terminal}`);
-  T.el.querySelector('.why').textContent = c.why;
+  const c053txt = c.fail_step !== null ? `c053 fails at step ${c.fail_step}` : `c053: episode ${c.terminal}`;
+  const verdict = base ? '' : own.fixed ? ` · <span class="verdict ok">this policy: FIXED, peg ${c.peg} seated at step ${own.seated_step}</span>`
+    : ` · <span class="verdict bad">this policy: still fails at step ${own.fail_step} (${own.why})</span>`;
+  T.el.querySelector('.sub').innerHTML = `board ${c.seed}/${c.episode} · peg ${c.peg} · ${c.shape} ${c.dia_mm} mm · start ${c.start} · ${c053txt}${verdict}`;
+  T.el.querySelector('.why').textContent = (base ? '' : 'Under c053: ') + c.why;
   T.el.querySelector('.lab').href = `index.html?case=${c.id}&policy=${clip.policy}`;
   T.ta.value = notes[String(c.id)] ? notes[String(c.id)].text : '';
   T.el.querySelector('.saved').textContent = notes[String(c.id)] ? 'saved' : '';
@@ -132,9 +142,9 @@ function loadTile(T, clip) {
   T.frames = clip.frames ? b64f(clip.frames) : null;
   T.n = clip.steps.length;
   T.failIdx = -1;
-  if (c.fail_step !== null && T.n) {   // the frame of the failure (or the last frame, when the failure ended the episode)
-    const k = clip.steps.findIndex((s) => s >= c.fail_step);
-    T.failIdx = k >= 0 ? k : (c.fail_step > clip.steps[T.n - 1] ? T.n - 1 : -1);
+  if (own.fail_step !== null && own.fail_step !== undefined && T.n) {   // this policy's failure frame (or the last frame)
+    const k = clip.steps.findIndex((s) => s >= own.fail_step);
+    T.failIdx = k >= 0 ? k : (own.fail_step > clip.steps[T.n - 1] ? T.n - 1 : -1);
   }
   const p0 = clip.pos[Math.max(0, T.failIdx)] || clip.pos[0] || [clip.scene.board_xy[0], clip.scene.board_xy[1], 0.03];
   T.controls.target.set(p0[0], p0[1], Math.max(0.03, p0[2]));
@@ -152,12 +162,14 @@ function showFrame(T, f) {
   const now = T.failIdx >= 0 && i >= T.failIdx && i < T.failIdx + 6;
   T.el.classList.toggle('failnow', now); T.el.classList.toggle('failed', T.failIdx >= 0 && i >= T.failIdx + 6);
   T.el.querySelector('.flash').style.display = now ? 'block' : 'none';
+  T.el.querySelector('.badge').style.display = T.own && T.own.fixed ? 'block' : 'none';
   const endHere = i === T.n - 1 && clip.end !== 'running';      // the episode itself ended (e.g. part_lost): nothing after this
   const en = T.el.querySelector('.ended');
   en.style.display = endHere ? 'block' : 'none';
   const fin = clip.final ? ` · ${clip.final.seated}/${clip.final.k} pegs seated · score ${clip.final.score.toFixed(3)}` : '';
-  en.textContent = endHere ? (clip.end === 'assembled' ? `ALL PEGS SEATED at step ${clip.steps[i]}${fin}` :
-    `EPISODE ENDED here (${clip.end})${fin}`) : '';
+  const endTxt = { assembled: `ALL PEGS SEATED at step ${clip.steps[i]}`, time_limit: 'TIME LIMIT reached',
+                   part_lost: 'EPISODE ENDED: a peg fell off the board' }[clip.end] || `EPISODE ENDED here (${clip.end})`;
+  en.textContent = endHere ? endTxt + fin : '';
   en.style.background = endHere && clip.end === 'assembled' ? '#1f6f45' : '#000c';
 }
 
