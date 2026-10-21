@@ -41,6 +41,12 @@
   .why { font-size:12px; color:var(--dim); max-height:3.0em; overflow:hidden; cursor:pointer; padding:0 9px 3px; }
   .why.open { max-height:none; color:var(--text); }
   .saved { color:var(--ok); font-size:11.5px; }
+  .result { position:absolute; left:8px; right:8px; bottom:8px; max-height:72%; overflow:auto; background:#0b0d12ee; border:1px solid var(--line);
+            border-radius:7px; padding:8px 10px; display:none; font-size:12.5px; line-height:1.45; }
+  .result .score { font-size:17px; font-weight:700; } .result .score.zero { color:var(--bad); } .result .score.full { color:var(--ok); }
+  .result .peg { display:flex; gap:7px; align-items:baseline; margin-top:3px; }
+  .result .dot { width:10px; height:10px; border-radius:50%; flex:none; transform:translateY(1px); }
+  .result .ok { color:var(--ok); font-weight:650; } .result .no { color:var(--bad); font-weight:650; }
 </style>
 <script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
 </head>
@@ -52,6 +58,7 @@
   <button id="cmp" title="each case twice: c053 on the left, the chosen policy on the right">⇆ Compare with c053</button>
   <button id="prev">◀ Prev 4</button><span id="page" class="dim"></span><button id="next">Next 4 ▶</button>
   <button id="play" class="on">❚❚ Pause</button>
+  <button id="replay" title="play the clips again from the start">↻ Replay</button>
   speed <select id="speed"><option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option></select>
   <select id="win"><option value="fail">around the failure (3 s before → 3 s after)</option><option value="full">whole episode (start → end)</option></select>
   <input id="scrub" type="range" min="0" max="99" value="0"> <span id="frame" class="dim"></span>
@@ -94,7 +101,7 @@ const tiles = [];
 for (let t = 0; t < 4; t++) {
   const el = document.createElement('div'); el.className = 'tile';
   el.innerHTML = `<div class="head"><div class="name"></div><div class="sub"></div></div><div class="why" title="click to expand"></div>
-    <div class="view"><div class="hud"></div><div class="flash">FAILS NOW</div><div class="badge">FIXED</div><div class="ended"></div><div class="loading">simulating…</div></div>
+    <div class="view"><div class="hud"></div><div class="flash">FAILS NOW</div><div class="badge">FIXED</div><div class="ended"></div><div class="result"></div><div class="loading">simulating…</div></div>
     <div class="foot"><textarea placeholder="Why does it fail, and how would you fix it? (saved for Claude)"></textarea>
       <div class="side"><a class="lab" target="_blank">open in lab ↗</a><span class="saved"></span></div></div>`;
   $('grid').append(el);
@@ -150,6 +157,22 @@ function loadTile(T, clip) {
   T.controls.target.set(p0[0], p0[1], Math.max(0.03, p0[2]));
   T.camera.position.set(p0[0] + 0.07, p0[1] - 0.2, p0[2] + 0.15);
   T.ring.scale.setScalar(c.dia_mm / 1000 + 0.004);
+  // the episode's result (score + why each peg counts or not), shown once the clip reaches its last frame
+  const R = clip.result, res = T.el.querySelector('.result');
+  if (R) {
+    const last = T.n ? clip.steps[T.n - 1] : 0;
+    const after = R.step > last + 1 ? ` <span class="dim">(this clip ends at step ${last}; the episode ran on to step ${R.step})</span>` : '';
+    res.innerHTML = `<div><span class="score ${R.score === 0 ? 'zero' : R.seated === R.k ? 'full' : ''}">Episode score ${R.score.toFixed(3)}</span>`
+      + ` · ${R.seated} of ${R.k} pegs counted · ${clip.policy}</div><div>${R.headline}${after}</div>`
+      + R.pegs.map((p) => `<div class="peg"><span class="dot" style="background:${PEG_COLORS[p.i % 8]}"></span><span><b>peg ${p.i}</b> `
+        + `${p.shape} ${p.dia_mm} mm, start ${p.start}: <span class="${p.counted ? 'ok' : 'no'}">${p.counted ? '✔ counted' : '✘ not counted'}</span>`
+        + ` · ${p.why} → ${p.points.toFixed(3)}</span></div>`).join('')
+      + `<div class="dim" style="margin-top:4px">Episode score = the average over its ${R.k} pegs. A seated peg earns 0.75 plus up to 0.25 for`
+      + ` seating early; a peg not seated at the end earns 0.</div>`;
+  } else {
+    res.innerHTML = '<div class="dim">No result: the episode did not finish.</div>';
+  }
+  res.style.display = 'none';
   T.el.querySelector('.loading').style.display = 'none';
 }
 function showFrame(T, f) {
@@ -163,9 +186,11 @@ function showFrame(T, f) {
   T.el.classList.toggle('failnow', now); T.el.classList.toggle('failed', T.failIdx >= 0 && i >= T.failIdx + 6);
   T.el.querySelector('.flash').style.display = now ? 'block' : 'none';
   T.el.querySelector('.badge').style.display = T.own && T.own.fixed ? 'block' : 'none';
+  const atEnd = f >= T.n - 1;                                    // this clip's last frame: show the episode's result
+  T.el.querySelector('.result').style.display = atEnd ? 'block' : 'none';
   const endHere = i === T.n - 1 && clip.end !== 'running';      // the episode itself ended (e.g. part_lost): nothing after this
   const en = T.el.querySelector('.ended');
-  en.style.display = endHere ? 'block' : 'none';
+  en.style.display = endHere && !atEnd ? 'block' : 'none';
   const fin = clip.final ? ` · ${clip.final.seated}/${clip.final.k} pegs seated · score ${clip.final.score.toFixed(3)}` : '';
   const endTxt = { assembled: `ALL PEGS SEATED at step ${clip.steps[i]}`, time_limit: 'TIME LIMIT reached',
                    part_lost: 'EPISODE ENDED: a peg fell off the board' }[clip.end] || `EPISODE ENDED here (${clip.end})`;
@@ -183,7 +208,7 @@ async function saveNote(T) {
 }
 
 // ---------- paging + playback ----------
-let cases = [], page = 0, frame = 0, playing = true, maxN = 100, compare = new URLSearchParams(location.search).get('compare') === '1';
+let cases = [], page = 0, frame = 0, playing = true, acc = 0, maxN = 100, compare = new URLSearchParams(location.search).get('compare') === '1';
 const fullQ = new URLSearchParams(location.search).get('full') === '1';
 const per = () => (compare ? 2 : 4);
 async function loadPage() {
@@ -203,7 +228,7 @@ async function loadPage() {
   }
   clips.forEach((clip, i) => loadTile(tiles[i], clip));
   maxN = Math.max(...clips.map((c) => c.steps.length), 1);
-  $('scrub').max = maxN - 1; frame = 0;
+  $('scrub').max = maxN - 1; frame = 0; acc = 0; setPlaying(true);      // plays once; ↻ Replay plays it again
   $('next').textContent = `Next ${n} ▶`; $('prev').textContent = `◀ Prev ${n}`;
 }
 $('win').onchange = () => { $('speed').value = $('win').value === 'full' ? '4' : '1'; page = 0; loadPage(); };
@@ -216,13 +241,18 @@ async function loadCat() {
 $('cat').onchange = loadCat;
 $('next').onclick = () => { if ((page + 1) * per() < cases.length) { page++; loadPage(); } };
 $('prev').onclick = () => { if (page > 0) { page--; loadPage(); } };
-$('play').onclick = () => { playing = !playing; $('play').textContent = playing ? '❚❚ Pause' : '▶ Play'; $('play').classList.toggle('on', playing); };
-$('scrub').oninput = () => { frame = +$('scrub').value; playing = false; $('play').textContent = '▶ Play'; $('play').classList.remove('on'); };
+function setPlaying(p) { playing = p; $('play').textContent = p ? '❚❚ Pause' : '▶ Play'; $('play').classList.toggle('on', p); }
+$('play').onclick = () => { if (!playing && frame >= maxN - 1) { frame = 0; acc = 0; } setPlaying(!playing); };
+$('replay').onclick = () => { frame = 0; acc = 0; setPlaying(true); };
+$('scrub').oninput = () => { frame = +$('scrub').value; setPlaying(false); };
 
-let acc = 0, lastT = performance.now();
+let lastT = performance.now();
 function loop(now) {
   const dt = (now - lastT) / 1000; lastT = now;
-  if (playing) { acc += dt * 25 * +$('speed').value; while (acc >= 1) { acc -= 1; frame = (frame + 1) % maxN; } }
+  if (playing) {                 // no looping: stop on the last frame (the result panels show there); ↻ Replay starts again
+    acc += dt * 25 * +$('speed').value;
+    while (acc >= 1) { acc -= 1; if (frame < maxN - 1) frame++; else { acc = 0; setPlaying(false); break; } }
+  }
   $('scrub').value = frame; $('frame').textContent = `frame ${frame + 1}/${maxN}`;
   tiles.forEach((T) => { if (T.clip) showFrame(T, frame); T.controls.update(); T.renderer.render(T.scene, T.camera); });
   requestAnimationFrame(loop);

@@ -32,7 +32,7 @@ import mujoco  # noqa: E402
 import onnxruntime as ort  # noqa: E402
 from nist_sim import env as E  # noqa: E402
 from nist_sim.conditions import sample_episodes  # noqa: E402
-from nist_sim.scoring import episode_score  # noqa: E402
+from nist_sim.scoring import episode_score, peg_score  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cases_lib  # noqa: E402
 import fx  # noqa: E402
@@ -213,6 +213,66 @@ class Lab:
             return {"fixed": False, "fail_step": r["tip"], "why": f"peg {k} fell over at step {r['tip']} and was never seated"}
         return {"fixed": False, "fail_step": int(e.steps), "why": f"peg {k} not seated when time ran out (step {int(e.steps)})"}
 
+    def _report(self, e, c):
+        """The episode's official score and, for every peg, why it counts or not (the scorer's own seated test, read back)."""
+        seated, first = e.peg_seated_at_end(), e.peg_first_seat_steps()
+        msa = e.action_l2 / max(1, e.steps)
+        score = episode_score(seated, first, c.max_steps, msa)
+        steps, k = int(e.steps), e.n_pegs
+        lost = [i for i in range(k) if (lambda p: abs(p[0]) > 0.30 or abs(p[1]) > 0.30 or p[2] < -0.01)(e.peg_pose(i)[0])]
+        head = {"assembled": f"All {k} pegs seated; the episode finished at step {steps}.",
+                "time_limit": f"Time limit reached at step {steps} of {c.max_steps}.",
+                "part_lost": f"Episode ended early at step {steps}: peg {lost[0] if lost else '?'} fell off the table, which stops the "
+                             f"episode at once. Only pegs seated at that moment count.",
+                "unstable": f"Episode ended early at step {steps}: the simulation became unstable (a part moved too fast). Only pegs "
+                            f"seated at that moment count."}.get(e.terminal_reason, f"Episode ended at step {steps} ({e.terminal_reason}).")
+        pegs = []
+        for i, pc in enumerate(c.pegs):
+            p, q = e.peg_pose(i)
+            hx, hy = e.slot_xy[i]
+            d = {"i": i, "shape": pc.shape(), "dia_mm": round(pc.diameter() * 1000), "start": pc.start_type, "counted": bool(seated[i])}
+            if seated[i]:
+                d["points"] = round(peg_score(True, first[i], c.max_steps, msa), 3)
+                d["why"] = f"seated in its own hole at step {first[i]}"
+                pegs.append(d)
+                continue
+            d["points"] = 0.0
+            az = abs(1.0 - 2.0 * (q[1] * q[1] + q[2] * q[2]))
+            tilt = math.degrees(math.acos(min(1.0, az)))
+            bottom = (p[2] - E.PEG_LEN / 2) * 1000
+            xy = math.hypot(p[0] - hx, p[1] - hy) * 1000
+            r = e.r_hole[i] * 1000
+            gap = (e.data.qpos[2] + E.PAD_BOTTOM_OFFSET - (p[2] + E.PEG_LEN / 2)) * 1000
+            touch = e._gripper_touching(e.peg_body[i])
+            other = [j for j in range(k) if j != i and math.hypot(p[0] - e.slot_xy[j][0], p[1] - e.slot_xy[j][1]) <= e.r_hole[j] + 0.002]
+            if i in lost:
+                why = "fell off the table" + (" (this ended the episode)" if e.terminal_reason == "part_lost" else "")
+            elif az < 0.5:
+                why = "lying on its side" + (" (it started lying; c053 has no way to stand a lying peg up)" if pc.start_type == "lying" else "")
+            elif xy > r + 0.5:
+                if other:
+                    why = f"standing in peg {other[0]}'s hole, not its own"
+                elif bottom < 3:
+                    why = f"standing on the board {xy:.0f} mm from the centre of its own hole: never inserted"
+                else:
+                    why = f"resting on something {bottom:.0f} mm above the board, {xy:.0f} mm from its own hole"
+            elif tilt > math.degrees(E.MAX_SEAT_TILT):
+                why = f"in its hole but tilted {tilt:.0f}° (must be within {math.degrees(E.MAX_SEAT_TILT):.0f}°)"
+            elif bottom > E.SEAT_TOL_Z * 1000:
+                why = f"in its hole but not pushed all the way down: its bottom is {bottom:.1f} mm above the floor (must be ≤ 1 mm)"
+            elif touch or gap < 2.0:
+                why = "in its hole, but the gripper is " + ("touching it" if touch else f"only {gap:.1f} mm above its top (must be ≥ 2 mm and not touching)")
+            elif e.seated_run[i] < E.SEATED_HOLD:
+                why = f"in its hole, but only for {int(e.seated_run[i])} steps at the end (needs {E.SEATED_HOLD} in a row)"
+            else:
+                why = "not counted by the scorer (reason not identified)"
+            if e.first_seat_step[i] is not None:
+                why = f"was seated at step {e.first_seat_step[i]}, then knocked out: at the end it is " + why
+            d["why"] = why
+            pegs.append(d)
+        return {"score": round(score, 3), "terminal": e.terminal_reason, "step": steps, "horizon": int(c.max_steps), "k": k,
+                "seated": int(sum(seated)), "headline": head, "pegs": pegs}
+
     def clips(self, ids, before=75, after=75, policy=None, full=False):
         """Movies of failure cases: each is simulated from step 0 with the policy (exactly as scored) and recorded from
         `before` steps ahead of its failure to `after` steps past it. Several cases run together, sharing each policy call."""
@@ -237,8 +297,8 @@ class Lab:
             names = [mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, int(m.geom_bodyid[g])) or "" for g in range(m.ngeom)]
             dyn = [g for g, b in enumerate(names) if b.startswith(("peg", "clutter")) or b in ("hand", "fl", "fr")]
             a, b = (0, int(c.max_steps)) if full else self._window(cs, before, after)
-            # c053's outcome is the census; any other policy runs to the episode's end so the clip knows its own result
-            run_to = int(c.max_steps) if (full or pkey != "c053") else min(b, int(c.max_steps))
+            # every clip runs to the episode's end (frames are kept only inside the window) so it can show the episode's score
+            run_to = int(c.max_steps)
             runs.append({"i": i, "cs": cs, "c": c, "e": e, "noise": r2, "dyn": dyn, "a": a, "b": min(b, int(c.max_steps)), "run_to": run_to,
                          "frames": [], "steps": [], "phases": [], "targets": [], "az": [], "touch": [], "pos": [], "static": None,
                          "up": False, "tip": None})
@@ -286,6 +346,7 @@ class Lab:
                 seated, first = e_.peg_seated_at_end(), e_.peg_first_seat_steps()
                 clip["final"] = {"score": round(episode_score(seated, first, r["c"].max_steps, e_.action_l2 / max(1, e_.steps)), 3),
                                  "seated": int(sum(seated)), "k": len(seated), "step": int(e_.steps)}
+                clip["result"] = self._report(e_, r["c"])
             clip["own"] = self._own(r, pkey)
             clip["policy"] = pkey
             self.clip_cache[(r["i"], int(before), int(after), pkey, bool(full))] = clip
