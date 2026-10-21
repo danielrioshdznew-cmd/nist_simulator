@@ -49,9 +49,10 @@
   <button id="cmp" title="each case twice: c053 on the left, the chosen policy on the right">⇆ Compare with c053</button>
   <button id="prev">◀ Prev 4</button><span id="page" class="dim"></span><button id="next">Next 4 ▶</button>
   <button id="play" class="on">❚❚ Pause</button>
-  speed <select id="speed"><option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
+  speed <select id="speed"><option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option></select>
+  <select id="win"><option value="fail">around the failure (3 s before → 3 s after)</option><option value="full">whole episode (start → end)</option></select>
   <input id="scrub" type="range" min="0" max="99" value="0"> <span id="frame" class="dim"></span>
-  <span class="dim">clip: 3 s before → 3 s after the failure, looping</span>
+
   <span style="flex:1"></span><a href="index.html">Lab</a> <a href="dashboard.html">Dashboard</a>
 </div>
 <div id="grid"></div>
@@ -154,7 +155,10 @@ function showFrame(T, f) {
   const endHere = i === T.n - 1 && clip.end !== 'running';      // the episode itself ended (e.g. part_lost): nothing after this
   const en = T.el.querySelector('.ended');
   en.style.display = endHere ? 'block' : 'none';
-  en.textContent = endHere ? `EPISODE ENDED here (${clip.end}) — nothing to show after this` : '';
+  const fin = clip.final ? ` · ${clip.final.seated}/${clip.final.k} pegs seated · score ${clip.final.score.toFixed(3)}` : '';
+  en.textContent = endHere ? (clip.end === 'assembled' ? `ALL PEGS SEATED at step ${clip.steps[i]}${fin}` :
+    `EPISODE ENDED here (${clip.end})${fin}`) : '';
+  en.style.background = endHere && clip.end === 'assembled' ? '#1f6f45' : '#000c';
 }
 
 // ---------- notes ----------
@@ -168,6 +172,7 @@ async function saveNote(T) {
 
 // ---------- paging + playback ----------
 let cases = [], page = 0, frame = 0, playing = true, maxN = 100, compare = new URLSearchParams(location.search).get('compare') === '1';
+const fullQ = new URLSearchParams(location.search).get('full') === '1';
 const per = () => (compare ? 2 : 4);
 async function loadPage() {
   const n = per();
@@ -178,17 +183,18 @@ async function loadPage() {
   if (!ids.length) return;
   let clips;
   if (compare) {        // left column = c053 as scored, right column = the chosen policy, same case per row
-    const [a, b] = await Promise.all([api('clips', { ids, before: 75, after: 75, policy: 'c053' }),
-                                      api('clips', { ids, before: 75, after: 75, policy: $('policy').value || undefined })]);
+    const [a, b] = await Promise.all([api('clips', { ids, before: 75, after: 75, full: $('win').value === 'full', policy: 'c053' }),
+                                      api('clips', { ids, before: 75, after: 75, full: $('win').value === 'full', policy: $('policy').value || undefined })]);
     clips = []; ids.forEach((_, i) => { clips.push(a.clips[i], b.clips[i]); });
   } else {
-    clips = (await api('clips', { ids, before: 75, after: 75, policy: $('policy').value || undefined })).clips;
+    clips = (await api('clips', { ids, before: 75, after: 75, full: $('win').value === 'full', policy: $('policy').value || undefined })).clips;
   }
   clips.forEach((clip, i) => loadTile(tiles[i], clip));
   maxN = Math.max(...clips.map((c) => c.steps.length), 1);
   $('scrub').max = maxN - 1; frame = 0;
   $('next').textContent = `Next ${n} ▶`; $('prev').textContent = `◀ Prev ${n}`;
 }
+$('win').onchange = () => { $('speed').value = $('win').value === 'full' ? '4' : '1'; page = 0; loadPage(); };
 $('cmp').onclick = () => { compare = !compare; $('cmp').classList.toggle('on', compare); page = 0; loadPage(); };
 async function loadCat() {
   const r = await api('cases', { cause: $('cat').value });
@@ -212,6 +218,7 @@ function loop(now) {
 
 (async () => {
   resize();
+  if (fullQ) { $('win').value = 'full'; $('speed').value = '4'; }
   notes = (await api('notes')).notes || {};
   const pl = await api('policies');
   const wantP = new URLSearchParams(location.search).get('policy');

@@ -31,6 +31,8 @@ cause, page with **Next 4 / Prev 4**, pause and scrub. Type your diagnosis in th
 exact case in the interactive lab.
 **⇆ Compare with c053** plays each case twice side by side: c053 (as scored) on the left, the policy chosen in the selector on
 the right (e.g. **c054 (your fixes)**), so you see exactly what a fix changes. Open it directly with `movies.html?compare=1`.
+The window selector switches between **around the failure** (3 s before → 3 s after) and **whole episode** (step 0 → the end; each
+side shows its final result: pegs seated and score). Whole episodes, side by side: `movies.html?compare=1&full=1` (plays at 4×).
 
 ## Dashboard
 

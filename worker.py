@@ -193,7 +193,7 @@ class Lab:
         start = cs.get("first_targeted") or 0
         return start, start + before + after
 
-    def clips(self, ids, before=75, after=75, policy=None):
+    def clips(self, ids, before=75, after=75, policy=None, full=False):
         """Movies of failure cases: each is simulated from step 0 with the policy (exactly as scored) and recorded from
         `before` steps ahead of its failure to `after` steps past it. Several cases run together, sharing each policy call."""
         self._load_cases()
@@ -201,7 +201,7 @@ class Lab:
         pkey = policy or self.pname
         out, todo = {}, []
         for i in ids:
-            key = (int(i), int(before), int(after), pkey)
+            key = (int(i), int(before), int(after), pkey, bool(full))
             if key in self.clip_cache:
                 out[int(i)] = self.clip_cache[key]
             else:
@@ -216,7 +216,7 @@ class Lab:
             m = e.model
             names = [mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, int(m.geom_bodyid[g])) or "" for g in range(m.ngeom)]
             dyn = [g for g, b in enumerate(names) if b.startswith(("peg", "clutter")) or b in ("hand", "fl", "fr")]
-            a, b = self._window(cs, before, after)
+            a, b = (0, int(c.max_steps)) if full else self._window(cs, before, after)
             runs.append({"i": i, "cs": cs, "c": c, "e": e, "noise": r2, "dyn": dyn, "a": a, "b": min(b, int(c.max_steps)),
                          "frames": [], "steps": [], "phases": [], "targets": [], "az": [], "touch": [], "pos": [], "static": None})
         while True:
@@ -250,8 +250,13 @@ class Lab:
                     "dyn": r["dyn"], "frames": base64.b64encode(np.stack(r["frames"]).tobytes()).decode() if r["frames"] else None,
                     "steps": r["steps"], "phases": r["phases"], "targets": r["targets"], "az": r["az"], "touch": r["touch"],
                     "pos": r["pos"], "end": r["e"].terminal_reason if r["e"].done else "running"}
+            if r["e"].done:                 # final result of the whole episode (full-episode movies)
+                e_ = r["e"]
+                seated, first = e_.peg_seated_at_end(), e_.peg_first_seat_steps()
+                clip["final"] = {"score": round(episode_score(seated, first, r["c"].max_steps, e_.action_l2 / max(1, e_.steps)), 3),
+                                 "seated": int(sum(seated)), "k": len(seated), "step": int(e_.steps)}
             clip["policy"] = pkey
-            self.clip_cache[(r["i"], int(before), int(after), pkey)] = clip
+            self.clip_cache[(r["i"], int(before), int(after), pkey, bool(full))] = clip
             out[r["i"]] = clip
         return {"clips": [out[int(i)] for i in ids]}
 
