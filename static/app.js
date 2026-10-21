@@ -239,6 +239,17 @@ async function loadCats() {
   $('cat').innerHTML = `<option value="all">All failures (${r.total})</option>` + r.cats.map((c) => `<option value="${c.key}">${c.label} (${c.n})</option>`).join('');
   const want = new URLSearchParams(location.search).get('cat');
   $('cat').value = want && r.cats.some((c) => c.key === want) ? want : (r.cats.some((c) => c.key === 'tip_pick') ? 'tip_pick' : 'all');
+  const wantCase = new URLSearchParams(location.search).get('case');
+  if (wantCase !== null) {                       // opened from a movie: jump to exactly that case
+    const all = (await api('cases', { cause: 'all' })).cases;
+    const c = all.find((x) => x.id === +wantCase);
+    if (c) {
+      $('cat').value = c.cat;
+      await loadCases(false);
+      $('cases').value = String(c.id);
+      return pickCase(true);
+    }
+  }
   await loadCases(true);
 }
 async function loadCases(jump) {

@@ -51,6 +51,12 @@ cloned by setup into `apex-competition-nist-assembly/`). Results are identical t
 - Inputs: the 184-dim observation (hand exact; peg / hole positions noisy and biased; wrist force/torque; pad force; last action).
 - Every feature is behind an environment switch read at build time: `X = E("RF_X", "0") == "1"`; `ENV.txt` lists c053's.
 
+## The user's notes
+
+The user watches failures on `movies.html` and writes what they see under each clip. Their notes are in `exports/notes.json`,
+keyed by case id (`{"text", "case": {id, cat, seed, episode, peg, fail_step}, "updated"}`). Read them first: they are the
+hypotheses to test. Check each one on that case with `tools/reproduce.py --case <id> --csv`.
+
 ## The method (please follow it)
 
 1. **Pick one cause**, from the dashboard or the table above. Open its cases in the lab and watch several fail

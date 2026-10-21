@@ -38,11 +38,11 @@
 <body>
 <main>
   <header><h1>NIST failure dashboard</h1><span class="sub">c053 on <span id="nb"></span> boards (seeds <span id="seeds"></span>) · the real v0.2.0 simulator</span>
-    <a href="index.html">Open the lab →</a></header>
+    <a href="index.html">Open the lab →</a> <a href="movies.html">Failure movies →</a></header>
   <div class="tiles" id="tiles"></div>
 
   <h2>Where the score goes</h2>
-  <p class="sub">Approximate score lost per episode by cause (an unseated peg costs its board ≈ 0.93 / number of pegs). Click a cause to open its cases in the lab.</p>
+  <p class="sub">Approximate score lost per episode by cause (an unseated peg costs its board ≈ 0.93 / number of pegs). Click a cause to watch its failures as movies, four at a time.</p>
   <div class="card"><div class="bars" id="lost"></div></div>
 
   <div class="cols">
@@ -129,7 +129,7 @@ function heat(n, max) { const a = max ? 0.12 + 0.78 * n / max : 0; return `backg
   const top = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${k}: ${v}`).join(', ');
   bars($('lost'), s.cats.map((c) => ({ label: c.label, value: c.lost, n: c.n,
     tip: `<b>${c.label}</b><br>${c.n} failed pegs on ${c.boards} boards<br>≈ ${fmt(c.lost, 4)} score per episode<br>sizes: ${top(c.size)} mm<br>starts: ${top(c.start)}` })),
-    s.cats[0].lost, (r) => `${fmt(r.value, 4)} · ${r.n} pegs`, (r) => `index.html?cat=${s.cats.find((c) => c.label === r.label).key}`);
+    s.cats[0].lost, (r) => `${fmt(r.value, 4)} · ${r.n} pegs`, (r) => `movies.html?cat=${s.cats.find((c) => c.label === r.label).key}`);
   const sizes = ['4', '8', '12', '16'];
   const mx = Math.max(...s.cats.flatMap((c) => sizes.map((z) => c.size[z] || 0)));
   $('sizes').innerHTML = `<tr><th>cause</th>${sizes.map((z) => `<th>${z} mm</th>`).join('')}<th>total</th></tr>` +

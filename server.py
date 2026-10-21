@@ -63,6 +63,29 @@ def main():
                 self.send_error(404)
                 return
             body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            req = {}
+            try:
+                req = json.loads(body)
+            except ValueError:
+                pass
+            if req.get("cmd") in ("note", "notes"):           # your diagnoses, kept in exports/notes.json (not the simulator)
+                nf = HERE / "exports" / "notes.json"
+                notes = json.loads(nf.read_text()) if nf.exists() else {}
+                if req["cmd"] == "note":
+                    cid = str(req.get("id"))
+                    if req.get("text", "").strip():
+                        notes[cid] = {"text": req["text"], "case": req.get("case"), "updated": time.strftime("%Y-%m-%d %H:%M:%S")}
+                    else:
+                        notes.pop(cid, None)
+                    nf.parent.mkdir(exist_ok=True)
+                    nf.write_text(json.dumps(notes, indent=1))
+                out = json.dumps({"notes": notes, "file": str(nf)}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+                return
             out = call(body)
             try:
                 if json.loads(body).get("cmd") == "export":   # also keep a copy in ./exports

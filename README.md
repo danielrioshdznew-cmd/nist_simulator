@@ -21,6 +21,15 @@ Setup creates `.venv` (numpy 2.5.4, mujoco 3.16.0, onnxruntime 1.31.0) and clone
 Options: `--port N`, `--host 0.0.0.0` (reach it from another machine), `--policy policy/<other>` (any folder with `policy.onnx` +
 `src/`).
 
+## Failure movies
+
+**http://127.0.0.1:8765/movies.html** shows **four failure cases at once, playing like videos in sync**, from ~3 s before each
+failure to ~1 s after it, looping. Each clip is labelled with its case number and cause, board, peg and failure step, and carries
+the explanation, a live step / phase / uprightness readout, a red marker on the failing peg and a **FAILS NOW** flash. Choose a
+cause, page with **Next 4 / Prev 4**, pause and scrub. Type your diagnosis in the box under a clip: notes are saved to
+`exports/notes.json` (case id, board, peg, your text) so Claude can read them and turn them into fixes. "open in lab" opens that
+exact case in the interactive lab.
+
 ## Dashboard
 
 **http://127.0.0.1:8765/dashboard.html** (or the "Dashboard ↗" link in the lab). It shows:
