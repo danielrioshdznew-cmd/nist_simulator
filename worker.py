@@ -33,6 +33,8 @@ import onnxruntime as ort  # noqa: E402
 from nist_sim import env as E  # noqa: E402
 from nist_sim.conditions import sample_episodes  # noqa: E402
 from nist_sim.scoring import episode_score  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cases_lib  # noqa: E402
 import fx  # noqa: E402
 import refport_fx as R  # noqa: E402
 
@@ -146,39 +148,29 @@ class Lab:
             out["seated_at_end"] = seated
         return out
 
-    # ---- failure bank ---------------------------------------------------------------------------------------------
-    def cases(self, cause="all", limit=400):
+    # ---- failure bank (cases_lib.py) ------------------------------------------------------------------------------
+    def _load_cases(self):
         if self.census is None:
-            if not BANK.exists():
-                self.census = []
-            else:
-                raw = gzip.open(BANK, "rt").read() if BANK.suffix == ".gz" else BANK.read_text()
-                self.census = json.loads(raw)["census"]
-        out = []
-        for r in self.census:
-            if r["seated"]:
-                continue
-            tip = r.get("tip") or {}
-            if r.get("start_lying"):
-                k, at = "lying start", max(0, (r.get("first") or 40) - 5)
-            elif r.get("squat_slot") is not None:
-                k, at = "wedged/squatter", max(0, (r.get("first") or 40) - 5)
-            elif r.get("blocked_by"):
-                k, at = "blocked by squatter", max(0, (r.get("first") or 40) - 5)
-            elif tip:
-                own = "own target" if tip.get("own") else "other target / untouched"
-                k, at = f"tipped in {tip.get('ph')} ({own})", max(0, int(tip["step"]) - 40)
-            elif r.get("lost"):
-                k, at = "part_lost episode", max(0, (r.get("first") or 40) - 5)
-            else:
-                k, at = "other (" + str(r.get("terminal")) + ")", max(0, (r.get("first") or 40) - 5)
-            if cause != "all" and not k.startswith(cause):
-                continue
-            out.append({"seed": r["seed"], "episode": r["episode"], "peg": r["peg"], "start": r["start"], "shape": r["shape"],
-                        "dia_mm": r["dia_mm"], "cause": k, "goto": at, "terminal": r["terminal"], "tier": r.get("tier")})
-            if len(out) >= limit:
-                break
-        return {"cases": out, "n": len(out)}
+            self.census = cases_lib.load_census(BANK)
+            self.all_cases = cases_lib.build_cases(self.census)
+
+    def categories(self):
+        self._load_cases()
+        n = {}
+        for c in self.all_cases:
+            n[c["cat"]] = n.get(c["cat"], 0) + 1
+        return {"total": len(self.all_cases), "boards": len({(c["seed"], c["episode"]) for c in self.all_cases}),
+                "episodes_total": len(cases_lib.SEEDS) * cases_lib.EPISODES_PER_SEED,
+                "cats": [{"key": k, "label": lab, "n": n.get(k, 0)} for k, lab in cases_lib.CATS if n.get(k)]}
+
+    def summary(self):
+        self._load_cases()
+        return cases_lib.summary(self.all_cases)
+
+    def cases(self, cause="all", limit=0):
+        self._load_cases()
+        out = [c for c in self.all_cases if cause in ("all", c["cat"])]
+        return {"cases": out[:limit] if limit else out, "n": len(out)}
 
     def export(self):
         return {"seed": self.seed, "episode": self.episode, "actions": self.actions, "step": self.e.steps}
@@ -193,6 +185,7 @@ def main():
             cmd = r.pop("cmd")
             res = {"reset": lambda: {**lab.reset(**r), **lab.state()}, "step": lambda: lab.step(**r), "goto": lambda: lab.goto(**r),
                    "snapshot": lambda: lab.snapshot(**r), "restore": lambda: lab.restore(**r), "cases": lambda: lab.cases(**r),
+                   "categories": lab.categories, "summary": lab.summary,
                    "export": lab.export, "state": lab.state}[cmd]()
         except Exception as ex:  # noqa: BLE001
             res = {"error": repr(ex), "trace": traceback.format_exc()[-1500:]}

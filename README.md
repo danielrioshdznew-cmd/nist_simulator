@@ -21,12 +21,32 @@ Setup creates `.venv` (numpy 2.5.4, mujoco 3.16.0, onnxruntime 1.31.0) and clone
 Options: `--port N`, `--host 0.0.0.0` (reach it from another machine), `--policy policy/<other>` (any folder with `policy.onnx` +
 `src/`).
 
+## Dashboard
+
+**http://127.0.0.1:8765/dashboard.html** (or the "Dashboard ↗" link in the lab). It shows:
+- where the score goes: score lost per episode by failure cause; click a cause to open its cases in the lab;
+- failed pegs by peg size and by start type;
+- the controller phase at which pegs tip over;
+- a glossary of every cause, controller phase and term.
+
+## For Claude on your machine
+
+`CLAUDE.md` briefs a Claude session on everything: the failure data, how the controller works, the method, and the tools.
+
+```bash
+python tools/reproduce.py --case 123 --csv trace_123.csv            # replay one failure, per-step trace
+python tools/build_policy.py --out policy/my_fix --set RF_MYFIX=1   # rebuild the policy with a new switch
+python tools/evaluate.py --policy policy/my_fix --cause tip_pick --control 8   # test only on that cause's failing boards
+```
+Run them with the setup's Python (`.venv\Scripts\python` on Windows, `.venv/bin/python` elsewhere).
+`data/failure_cases.json.gz` lists all 3,604 cases with their cause, explanation, failure step and board conditions.
+
 ## What you can do
 
 | panel | what it does |
 |---|---|
 | **Episode** | Any board: seed + episode (0-63). The conditions line shows friction, peg mass, hole clearance, observation noise, action delay. |
-| **Failure cases** | The ~3,600 pegs c053 failed to seat on 8,192 boards (seeds 6801-6928, `data/failure_bank_c053.json.gz`), with their cause: lying start, tipped over (and in which phase), wedged/squatter, blocked, part_lost. **Go to case** runs the policy up to ~40 steps before the failure. |
+| **Failure cases** | ALL 3,604 pegs c053 failed to seat on 8,192 boards (2,316 boards with a failure; seeds 6801-6928, `data/failure_bank_c053.json.gz`), in 12 causes with counts: knocked over while picking / carrying, fell over at its own insertion or release, knocked over while the hand worked on another peg, fell over by itself, fell off the table, episode ended by another peg falling off, squatter, blocked hole, ran out of time, never attempted, lying start. Filter by size and shape. Choosing a case jumps there, marks the failing peg with a red ring and arrow, and explains **why** it failed (what happened, at which step and phase, contacts, pushes, end state); the event steps are links. **▶ Play to the failure** runs the policy and pauses just after it fails; **⟲ Just before the failure** goes back. The page opens on a failure. |
 | **Run** | Play at real speed (25 steps/s) or faster, Step, +25. Driver = Policy or Manual. |
 | **Manual control** | **W/S** +y/−y, **A/D** −x/+x, **R/F** up/down, **Q/E** yaw. **G** toggles the jaws; the slider sets the exact jaw gap target (0-24 mm). "move" = action size (1.0 = the 4 mm/step maximum). Hold keys while playing, or press Step. |
 | **Snapshots** | Save the exact simulator state, try something, Restore, try again. Unlimited tries from the same moment. |
@@ -63,6 +83,10 @@ Options: `--port N`, `--host 0.0.0.0` (reach it from another machine), `--policy
 
 ## Files
 
-`server.py` (web server + relay), `worker.py` (simulator + policy, JSON over stdin/stdout), `static/` (three.js page; three.js r160
-bundled in `static/vendor/`), `policy/c053/` (policy.onnx sha256 20283cda..., `src/` = the controller source the phase names are
-decoded with), `data/failure_bank_c053.json.gz` (per-peg failure census).
+| path | what |
+|---|---|
+| `server.py`, `worker.py`, `static/` | the lab (three.js r160 bundled in `static/vendor/`) and `static/dashboard.html` |
+| `cases_lib.py`, `simlib.py`, `tools/` | the failure catalogue, the headless runner, and the reproduce / build / evaluate / precompute tools |
+| `policy/c053/` | `policy.onnx` (sha256 20283cda...) and `src/` (controller source, graph builder, exporter, switches) |
+| `data/` | the failure bank census, c053's results on those boards, board conditions, and the case list |
+| `CLAUDE.md` | briefing for a Claude session working on fixes |

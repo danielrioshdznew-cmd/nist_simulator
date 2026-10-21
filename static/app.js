@@ -57,7 +57,7 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 
-let meshes = [], meta = null, last = null, follow = false, ghost = true, xray = false, cases = [];
+let meshes = [], meta = null, last = null, follow = false, ghost = true, xray = false, cases = [], catLabels = {}, cur = null;
 
 function geomMesh(g) {
   const [a, b, c] = g.size;
@@ -114,6 +114,18 @@ function drawOverlay(st) {
     const he = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: col }));
     he.scale.setScalar(r * 0.8); he.position.set(p.hole_est[0], p.hole_est[1], 0.0207); overlay.add(he);
   });
+  if (cur && meta && cur.seed === meta.seed && cur.episode === meta.episode) {
+    const p = st.pegs[cur.peg];
+    if (p) {
+      const top = (m) => { m.material.depthTest = false; m.material.transparent = true; m.renderOrder = 999; overlay.add(m); return m; };
+      const cone = top(new THREE.Mesh(new THREE.ConeGeometry(0.005, 0.014, 16), new THREE.MeshBasicMaterial({ color: 0xff3b3b })));
+      cone.rotation.x = -Math.PI / 2;
+      cone.position.set(p.pos[0], p.pos[1], p.pos[2] + 0.045);
+      const ring = top(new THREE.Mesh(new THREE.TorusGeometry(1, 0.08, 8, 48), new THREE.MeshBasicMaterial({ color: 0xff3b3b, opacity: 0.9 })));
+      ring.scale.setScalar(meta.pegs_meta[cur.peg].dia_mm / 1000 + 0.004);
+      ring.position.set(p.pos[0], p.pos[1], p.pos[2]);
+    }
+  }
   const t = st.hand.target;
   const cross = new THREE.Mesh(new THREE.OctahedronGeometry(0.003), new THREE.MeshBasicMaterial({ color: 0x5aa7ff, wireframe: true }));
   cross.position.set(t[0], t[1], t[2]); overlay.add(cross);
@@ -158,11 +170,14 @@ function show(st) {
     const e = Math.hypot(p.est[0] - p.pos[0], p.est[1] - p.pos[1]) * 1000;
     const az = p.az > 0.985 ? `<span class="ok">${fmt(p.az, 2)}</span>` : p.az < 0.5 ? `<span class="bad">${fmt(p.az, 2)}</span>` : `<span class="warn">${fmt(p.az, 2)}</span>`;
     const seat = p.seated_now ? '<span class="ok">yes</span>' : (p.first_seat !== null ? `<span class="warn">@${p.first_seat}</span>` : '—');
-    return `<tr><td><span class="sw" style="background:${PEG_COLORS[p.i % 8]}"></span>${p.i} ${m.shape[0]}${m.dia_mm}</td><td>${m.start}</td>` +
+    const failing = cur && meta && cur.seed === meta.seed && cur.episode === meta.episode && cur.peg === p.i;
+    return `<tr${failing ? ' style="background:#3a1d1d"' : ''}><td><span class="sw" style="background:${PEG_COLORS[p.i % 8]}"></span>${p.i} ${m.shape[0]}${m.dia_mm}${failing ? ' ◀' : ''}</td><td>${m.start}</td>` +
       `<td>${az}</td><td>${seat}</td><td>${p.touch ? '✋' : ''}</td><td>${fmt(e, 1)}</td></tr>`;
   });
   $('pegs').innerHTML = '<tr><th>peg</th><th>start</th><th>upright</th><th>seated</th><th>grip</th><th>est err mm</th></tr>' + rows.join('');
+  const onCase = cur && meta && cur.seed === meta.seed && cur.episode === meta.episode;
   $('hud').textContent = `step ${st.step}/${meta ? meta.horizon : '?'} · ${mode === 'policy' ? 'POLICY' : 'MANUAL'} · ${pol.phase} → peg ${pol.target}` +
+    (onCase ? ` · failing peg ${cur.peg} (red arrow)${cur.fail_step !== null ? ' fails at step ' + cur.fail_step : ''}` : '') +
     (st.done ? ` · END ${st.terminal} score ${st.score}` : '');
 }
 
@@ -186,15 +201,26 @@ document.addEventListener('keyup', (ev) => { keys.delete(ev.key.toLowerCase()); 
 $('mag').addEventListener('input', () => { $('magv').textContent = (+$('mag').value).toFixed(2); showAct(); });
 $('grip').addEventListener('input', () => { $('gripv').textContent = `${(+$('grip').value).toFixed(1)} mm`; showAct(); });
 
+// One action at a time: while the lab works (e.g. re-running the policy to a failure), other clicks wait their turn.
+let queue = Promise.resolve();
+function guarded(label, fn) {
+  const run = queue.then(async () => {
+    busy = true;
+    if (label) $('status').innerHTML = `<span class="warn">● working… ${label}</span>`;
+    try { return await fn(); } finally { busy = false; if (label) setStatus(true); }
+  });
+  queue = run.catch(() => {});
+  return run;
+}
 async function stepOnce(n) {
-  if (busy) return; busy = true;
-  try { show(await api('step', { n, mode, action: manualAction() })); } finally { busy = false; }
+  if (busy) return;   // the play loop just skips a tick while something else runs
+  return guarded('', async () => show(await api('step', { n, mode, action: manualAction() })));
 }
 function setMode(m) { mode = m; $('mPolicy').classList.toggle('on', m === 'policy'); $('mManual').classList.toggle('on', m === 'manual'); if (last) show(last); }
 $('mPolicy').onclick = () => setMode('policy');
 $('mManual').onclick = () => setMode('manual');
-$('step1').onclick = () => stepOnce(1);
-$('step25').onclick = () => stepOnce(25);
+$('step1').onclick = () => guarded('', async () => show(await api('step', { n: 1, mode, action: manualAction() })));
+$('step25').onclick = () => guarded('stepping 25', async () => show(await api('step', { n: 25, mode, action: manualAction() })));
 $('play').onclick = async () => {
   playing = !playing; $('play').textContent = playing ? '❚❚ Pause' : '▶ Play'; $('play').classList.toggle('on', playing);
   while (playing) {
@@ -205,25 +231,86 @@ $('play').onclick = async () => {
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
   }
 };
-$('reset').onclick = async () => { playing = false; const s = await api('reset', { seed: +$('seed').value, episode: +$('epi').value }); buildScene(s); show(s); };
-$('loadcases').onclick = async () => {
-  const r = await api('cases', { cause: $('cause').value });
+$('reset').onclick = () => { playing = false; return guarded('resetting', async () => { const s = await api('reset', { seed: +$('seed').value, episode: +$('epi').value }); buildScene(s); show(s); }); };
+async function loadCats() {
+  const r = await api('categories');
+  catLabels = Object.fromEntries(r.cats.map((c) => [c.key, c.label]));
+  $('casecount').textContent = `${r.total} failed pegs on ${r.boards} boards`;
+  $('cat').innerHTML = `<option value="all">All failures (${r.total})</option>` + r.cats.map((c) => `<option value="${c.key}">${c.label} (${c.n})</option>`).join('');
+  const want = new URLSearchParams(location.search).get('cat');
+  $('cat').value = want && r.cats.some((c) => c.key === want) ? want : (r.cats.some((c) => c.key === 'tip_pick') ? 'tip_pick' : 'all');
+  await loadCases(true);
+}
+async function loadCases(jump) {
+  const r = await api('cases', { cause: $('cat').value });
   cases = r.cases;
-  $('cases').innerHTML = r.cases.map((c, i) => `<option value="${i}">${c.seed}/${c.episode} peg ${c.peg} ${c.shape[0]}${c.dia_mm} ${c.start} · ${c.cause} · @${c.goto}</option>`).join('');
-};
-$('gocase').onclick = async () => {
+  fillCases();
+  if (jump && $('cases').options.length) { $('cases').selectedIndex = 0; await pickCase(true); }
+}
+function fillCases() {
+  const fs = $('fsize').value, fh = $('fshape').value;
+  const vis = cases.filter((c) => (!fs || Math.round(c.dia_mm) === +fs) && (!fh || c.shape === fh));
+  $('listcount').textContent = `${vis.length} shown`;
+  $('cases').innerHTML = vis.map((c) => `<option value="${c.id}">${c.seed}/${c.episode} · peg ${c.peg} ${c.shape} ${c.dia_mm} mm · ${c.start}` +
+    ` · ${c.fail_step !== null ? 'fails @' + c.fail_step : c.terminal}</option>`).join('');
+}
+function showWhy(c) {
+  const ev = c.events.map(([s, lab]) => `<a data-step="${s}">step ${s}: ${lab}</a>`).join('');
+  $('why').innerHTML = `<span class="cat">${catLabels[c.cat] || c.cat}</span>${c.why}${ev ? '<br>' + ev : ''}`;
+  $('why').querySelectorAll('a').forEach((a) => (a.onclick = () => gotoStep(Math.max(0, +a.dataset.step - 5))));
+}
+function gotoStep(step) {
+  if (!cur) return Promise.resolve();
+  playing = false;
+  const c = cur;
+  return guarded(`running the policy to step ${step} of board ${c.seed}/${c.episode}`, async () => {
+    const fresh = !meta || meta.seed !== c.seed || meta.episode !== c.episode;
+    const s = await api('goto', { seed: c.seed, episode: c.episode, step });
+    buildScene(s); show(s);
+    const p = s.pegs[c.peg];
+    if (p && fresh) {   // look at the failing peg
+      controls.target.set(p.pos[0], p.pos[1], Math.max(0.03, p.pos[2]));
+      camera.position.set(p.pos[0] + 0.06, p.pos[1] - 0.17, p.pos[2] + 0.13);
+    }
+  });
+}
+let pickTimer = null;
+async function pickCase(now) {
   const o = $('cases').selectedOptions[0]; if (!o) return;
-  const c = cases[+o.value];
-  playing = false; $('seed').value = c.seed; $('epi').value = c.episode;
-  const s = await api('goto', { seed: c.seed, episode: c.episode, step: c.goto });
-  buildScene(s); show(s);
+  cur = cases.find((c) => c.id === +o.value);
+  $('seed').value = cur.seed; $('epi').value = cur.episode;
+  showWhy(cur);
+  clearTimeout(pickTimer);
+  if (now) return gotoStep(cur.goto);
+  pickTimer = setTimeout(() => gotoStep(cur.goto), 250);
+}
+$('cat').onchange = () => loadCases(true);
+$('fsize').onchange = fillCases;
+$('fshape').onchange = fillCases;
+$('cases').onchange = () => pickCase(false);
+$('gocase').onclick = () => cur && gotoStep(cur.goto);
+$('playfail').onclick = async () => {
+  if (!cur) return;
+  await queue;
+  const onCase = meta && cur.seed === meta.seed && cur.episode === meta.episode;
+  if (!onCase || !last || last.step > (cur.fail_step ?? 1e9)) await gotoStep(cur.goto);
+  setMode('policy');
+  const stopAt = cur.fail_step !== null ? cur.fail_step + 8 : 1e9;
+  playing = true; $('play').textContent = '❚❚ Pause'; $('play').classList.add('on');
+  while (playing && last && !last.done && last.step < stopAt) {
+    const t0 = performance.now();
+    await stepOnce(1);
+    const wait = 40 - (performance.now() - t0);
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  }
+  playing = false; $('play').textContent = '▶ Play'; $('play').classList.remove('on');
 };
-$('save').onclick = async () => {
+$('save').onclick = () => guarded('saving', async () => {
   const r = await api('snapshot', { name: $('snapname').value || 's' });
   $('snaps').innerHTML = r.snapshots.map((n) => `<option>${n}</option>`).join('');
   $('snaps').value = r.saved;
-};
-$('restore').onclick = async () => { const n = $('snaps').value; if (!n) return; playing = false; const s = await api('restore', { name: n }); buildScene(s); show(s); };
+});
+$('restore').onclick = () => { const n = $('snaps').value; if (!n) return; playing = false; return guarded('restoring', async () => { const s = await api('restore', { name: n }); buildScene(s); show(s); }); };
 $('export').onclick = async () => {
   const r = await api('export');
   $('status').innerHTML = `<span class="ok">● exported ${r.actions.length} actions → saved on the lab machine: ${r.saved_to || '(not saved)'}</span>`;
@@ -239,4 +326,4 @@ $('xray').onclick = () => { xray = !xray; $('xray').classList.toggle('on', xray)
 
 function loop() { controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); }
 resize(); loop(); showAct();
-$('reset').click();
+$('reset').onclick().then(() => loadCats());

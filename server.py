@@ -26,6 +26,7 @@ def main():
     ap.add_argument("--bank", default=str(HERE / "data/failure_bank_c053.json.gz"))
     ap.add_argument("--sandbox", default="", help="optional wrapper to run the simulator in (e.g. a netns-run script)")
     a = ap.parse_args()
+    a.referee, a.bank = str(Path(a.referee).resolve()), str(Path(a.bank).resolve())
     if not (Path(a.referee) / "referee/nist_sim/env.py").exists():
         sys.exit(f"simulator not found in {a.referee}: run setup first (see README)")
     cmd = [sys.executable, "-I", "-B", str(HERE / "worker.py"), str(HERE), a.referee, str(Path(a.policy).resolve()), a.bank]
@@ -83,7 +84,9 @@ def main():
     print(f"NIST simulator lab ({platform.system()}, policy {Path(a.policy).name}) - open http://127.0.0.1:{a.port}", flush=True)
     if a.host == "0.0.0.0":
         try:
-            print(f"   or from another machine: http://{socket.gethostbyname(socket.gethostname())}:{a.port}", flush=True)
+            s_ = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s_.connect(("10.255.255.255", 1))          # no packet is sent; this only picks the outgoing interface
+            print(f"   or from another machine: http://{s_.getsockname()[0]}:{a.port}", flush=True)
         except OSError:
             pass
     ThreadingHTTPServer((a.host, a.port), H).serve_forever()
