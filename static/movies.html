@@ -45,6 +45,7 @@
 <div id="bar">
   <h1>Failure movies</h1>
   <select id="cat"></select>
+  policy <select id="policy"></select>
   <button id="prev">◀ Prev 4</button><span id="page" class="dim"></span><button id="next">Next 4 ▶</button>
   <button id="play" class="on">❚❚ Pause</button>
   speed <select id="speed"><option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
@@ -116,11 +117,11 @@ addEventListener('resize', resize);
 function loadTile(T, clip) {
   T.clip = clip; T.world.clear(); T.el.classList.remove('failnow', 'failed');
   const c = clip.case;
-  T.el.querySelector('.name').innerHTML = `<span class="num">#${c.id}</span>${clip.label}`;
+  T.el.querySelector('.name').innerHTML = `<span class="num">#${c.id}</span>${clip.label} <span class="dim" style="font-weight:400">· ${clip.policy}</span>`;
   T.el.querySelector('.sub').textContent = `board ${c.seed}/${c.episode} · peg ${c.peg} · ${c.shape} ${c.dia_mm} mm · start ${c.start} · ` +
     (c.fail_step !== null ? `fails at step ${c.fail_step}` : `episode ${c.terminal}`);
   T.el.querySelector('.why').textContent = c.why;
-  T.el.querySelector('.lab').href = `index.html?case=${c.id}`;
+  T.el.querySelector('.lab').href = `index.html?case=${c.id}&policy=${clip.policy}`;
   T.ta.value = notes[String(c.id)] ? notes[String(c.id)].text : '';
   T.el.querySelector('.saved').textContent = notes[String(c.id)] ? 'saved' : '';
   T.meshes = clip.scene.geoms.map((g) => { const m = geomMesh(g); if (m) T.world.add(m); return m; });
@@ -171,7 +172,7 @@ async function loadPage() {
   $('page').textContent = cases.length ? `cases ${page * 4 + 1}-${Math.min(cases.length, page * 4 + 4)} of ${cases.length}` : 'no cases';
   tiles.forEach((T, i) => { T.el.style.visibility = i < ids.length ? 'visible' : 'hidden'; T.el.querySelector('.loading').style.display = 'flex'; });
   if (!ids.length) return;
-  const r = await api('clips', { ids, before: 75, after: 75 });
+  const r = await api('clips', { ids, before: 75, after: 75, policy: $('policy').value || undefined });
   r.clips.forEach((clip, i) => loadTile(tiles[i], clip));
   maxN = Math.max(...r.clips.map((c) => c.steps.length), 1);
   $('scrub').max = maxN - 1; frame = 0;
@@ -199,6 +200,11 @@ function loop(now) {
 (async () => {
   resize();
   notes = (await api('notes')).notes || {};
+  const pl = await api('policies');
+  const wantP = new URLSearchParams(location.search).get('policy');
+  $('policy').innerHTML = pl.policies.map((n) => `<option value="${n}">${n === 'c053' ? 'c053 (as scored)' : n}</option>`).join('');
+  $('policy').value = wantP && pl.policies.includes(wantP) ? wantP : pl.current;
+  $('policy').onchange = () => loadPage();
   const s = await api('categories');
   const want = new URLSearchParams(location.search).get('cat');
   $('cat').innerHTML = `<option value="all">All failures (${s.total})</option>` + s.cats.map((c) => `<option value="${c.key}">${c.label} (${c.n})</option>`).join('');

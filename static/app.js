@@ -231,7 +231,7 @@ $('play').onclick = async () => {
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
   }
 };
-$('reset').onclick = () => { playing = false; return guarded('resetting', async () => { const s = await api('reset', { seed: +$('seed').value, episode: +$('epi').value }); buildScene(s); show(s); }); };
+$('reset').onclick = () => { playing = false; return guarded('resetting', async () => { const s = await api('reset', { seed: +$('seed').value, episode: +$('epi').value, policy: $('policy').value || undefined }); buildScene(s); show(s); }); };
 async function loadCats() {
   const r = await api('categories');
   catLabels = Object.fromEntries(r.cats.map((c) => [c.key, c.label]));
@@ -276,7 +276,7 @@ function gotoStep(step) {
   const c = cur;
   return guarded(`running the policy to step ${step} of board ${c.seed}/${c.episode}`, async () => {
     const fresh = !meta || meta.seed !== c.seed || meta.episode !== c.episode;
-    const s = await api('goto', { seed: c.seed, episode: c.episode, step });
+    const s = await api('goto', { seed: c.seed, episode: c.episode, step, policy: $('policy').value || undefined });
     buildScene(s); show(s);
     const p = s.pegs[c.peg];
     if (p && fresh) {   // look at the failing peg
@@ -337,4 +337,12 @@ $('xray').onclick = () => { xray = !xray; $('xray').classList.toggle('on', xray)
 
 function loop() { controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); }
 resize(); loop(); showAct();
-$('reset').onclick().then(() => loadCats());
+(async () => {
+  const p = await api('policies');
+  const want = new URLSearchParams(location.search).get('policy');
+  $('policy').innerHTML = p.policies.map((n) => `<option value="${n}">${n === 'c053' ? 'c053 (as scored)' : n}</option>`).join('');
+  $('policy').value = want && p.policies.includes(want) ? want : p.current;
+  $('policy').onchange = () => (cur ? gotoStep(cur.goto) : $('reset').onclick());
+  await $('reset').onclick();
+  await loadCats();
+})();

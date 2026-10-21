@@ -52,11 +52,24 @@ class Lab:
     def __init__(self):
         so = ort.SessionOptions()
         so.intra_op_num_threads = 1
-        self.sess = ort.InferenceSession(str(POLICY / "policy.onnx"), so, providers=["CPUExecutionProvider"])
+        self.sessions = {}
+        for d in sorted(POLICY.parent.iterdir()):
+            if (d / "policy.onnx").exists():
+                self.sessions[d.name] = ort.InferenceSession(str(d / "policy.onnx"), so, providers=["CPUExecutionProvider"])
+        self.pname = POLICY.name
+        self.sess = self.sessions[self.pname]
         self.snaps, self.e, self.census, self.clip_cache = {}, None, None, {}
 
     # ---- episode control -------------------------------------------------------------------------------------------
-    def reset(self, seed, episode):
+    def use(self, policy=None):
+        if policy and policy in self.sessions:
+            self.pname, self.sess = policy, self.sessions[policy]
+
+    def policies(self):
+        return {"policies": list(self.sessions), "current": self.pname}
+
+    def reset(self, seed, episode, policy=None):
+        self.use(policy)
         _, conds = sample_episodes(int(seed), 8, "live")
         c = conds[int(episode)]
         r1, r2 = (np.random.default_rng(s) for s in np.random.SeedSequence([int(seed), 0x5245, int(episode)]).spawn(2))
@@ -86,8 +99,8 @@ class Lab:
                 self.pa = self._policy(self.obs)
         return self.state()
 
-    def goto(self, seed, episode, step):
-        self.reset(seed, episode)
+    def goto(self, seed, episode, step, policy=None):
+        self.reset(seed, episode, policy)
         while self.e.steps < int(step) and not self.e.done:
             self.step(1, "policy")
         return {**self.scene(), **self.state()}
@@ -114,7 +127,7 @@ class Lab:
                           "body": mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, b) or ""})
         pegs = [{"i": i, "shape": p.shape(), "dia_mm": round(p.diameter() * 1000, 1), "start": p.start_type, "slot": int(p.slot)}
                 for i, p in enumerate(c.pegs)]
-        return {"seed": seed, "episode": episode, "horizon": int(c.max_steps), "geoms": geoms, "pegs_meta": pegs,
+        return {"seed": seed, "episode": episode, "horizon": int(c.max_steps), "geoms": geoms, "pegs_meta": pegs, "policy": self.pname,
                 "board_xy": [float(x) for x in c.board_xy], "board_yaw": float(c.board_yaw),
                 "conditions": {"friction": round(float(c.friction), 3), "peg_mass_g": round(float(c.peg_mass) * 1000, 1),
                                "clearance_mm": round(float(c.clearance) * 1000, 3), "obs_noise_mm": round(float(c.obs_noise) * 1000, 2),
@@ -180,13 +193,15 @@ class Lab:
         start = cs.get("first_targeted") or 0
         return start, start + before + after
 
-    def clips(self, ids, before=75, after=75):
+    def clips(self, ids, before=75, after=75, policy=None):
         """Movies of failure cases: each is simulated from step 0 with the policy (exactly as scored) and recorded from
         `before` steps ahead of its failure to `after` steps past it. Several cases run together, sharing each policy call."""
         self._load_cases()
+        sess = self.sessions.get(policy or self.pname, self.sess)
+        pkey = policy or self.pname
         out, todo = {}, []
         for i in ids:
-            key = (int(i), int(before), int(after))
+            key = (int(i), int(before), int(after), pkey)
             if key in self.clip_cache:
                 out[int(i)] = self.clip_cache[key]
             else:
@@ -209,7 +224,7 @@ class Lab:
             if not live:
                 break
             obs = np.round(np.stack([r["e"].observe(r["noise"]) for r in live]), 6).astype(np.float32)
-            acts = self.sess.run(None, {"obs": obs})[0]
+            acts = sess.run(None, {"obs": obs})[0]
             for r, act in zip(live, acts):
                 e = r["e"]
                 if e.steps >= r["a"]:
@@ -235,7 +250,8 @@ class Lab:
                     "dyn": r["dyn"], "frames": base64.b64encode(np.stack(r["frames"]).tobytes()).decode() if r["frames"] else None,
                     "steps": r["steps"], "phases": r["phases"], "targets": r["targets"], "az": r["az"], "touch": r["touch"],
                     "pos": r["pos"], "end": r["e"].terminal_reason if r["e"].done else "running"}
-            self.clip_cache[(r["i"], int(before), int(after))] = clip
+            clip["policy"] = pkey
+            self.clip_cache[(r["i"], int(before), int(after), pkey)] = clip
             out[r["i"]] = clip
         return {"clips": [out[int(i)] for i in ids]}
 
@@ -253,6 +269,7 @@ def main():
             res = {"reset": lambda: {**lab.reset(**r), **lab.state()}, "step": lambda: lab.step(**r), "goto": lambda: lab.goto(**r),
                    "snapshot": lambda: lab.snapshot(**r), "restore": lambda: lab.restore(**r), "cases": lambda: lab.cases(**r),
                    "categories": lab.categories, "summary": lab.summary, "clips": lambda: lab.clips(**r),
+                   "policies": lab.policies,
                    "export": lab.export, "state": lab.state}[cmd]()
         except Exception as ex:  # noqa: BLE001
             res = {"error": repr(ex), "trace": traceback.format_exc()[-1500:]}
