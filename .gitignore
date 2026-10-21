@@ -1,0 +1,5 @@
+.venv/
+apex-competition-nist-assembly/
+exports/
+__pycache__/
+*.pyc
