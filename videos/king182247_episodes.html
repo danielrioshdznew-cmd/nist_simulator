@@ -62,15 +62,75 @@ function geomMesh(g) {
   else if (HAND.has(g.body)) color = new THREE.Color(g.name.startsWith('pad') ? '#e0e0e0' : '#6b7280');
   else if (/^clutter/.test(g.body)) color = new THREE.Color('#5b7db1');
   const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.55, metalness: 0.05, transparent: HAND.has(g.body), opacity: HAND.has(g.body) ? 0.55 : g.rgba[3] });
-  const m = new THREE.Mesh(geo, mat); if (g.rgba[3] === 0) m.visible = false; return m;
+  const m = new THREE.Mesh(geo, mat); if (g.rgba[3] === 0) m.visible = false; m.userData.under = g.name === 'board_top' || g.type === 'plane'; return m;
 }
 function place(m, a, o) {       // a = int16 [x y z qx qy qz qw] per geom
   m.position.set(a[o] * D.pos_q, a[o + 1] * D.pos_q, a[o + 2] * D.pos_q);
   m.quaternion.set(a[o + 3] / 32767, a[o + 4] / 32767, a[o + 5] / 32767, a[o + 6] / 32767);
 }
 
+// No WebGL (e.g. VS Code with hardware acceleration off): draw the same scene with a 2D canvas, flat-shaded, far to near.
+class Canvas2DRenderer {
+  constructor() { this.domElement = document.createElement('canvas'); this.ctx = this.domElement.getContext('2d'); this.tri = new Map(); }
+  setPixelRatio() {}
+  setSize(w, h) { const r = Math.min(devicePixelRatio || 1, 2); this.domElement.width = Math.max(1, Math.round(w * r)); this.domElement.height = Math.max(1, Math.round(h * r)); }
+  tris(geo) {
+    let t = this.tri.get(geo); if (t) return t;
+    const p = geo.attributes.position.array, ix = geo.index ? geo.index.array : null, n = ix ? ix.length : p.length / 3;
+    t = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { const k = ix ? ix[i] : i; t[3 * i] = p[3 * k]; t[3 * i + 1] = p[3 * k + 1]; t[3 * i + 2] = p[3 * k + 2]; }
+    this.tri.set(geo, t); return t;
+  }
+  render(scene, camera) {
+    scene.updateMatrixWorld(); camera.updateMatrixWorld();
+    const ctx = this.ctx, W = this.domElement.width, H = this.domElement.height;
+    ctx.globalAlpha = 1; ctx.fillStyle = scene.background.getStyle(); ctx.fillRect(0, 0, W, H);
+    const v = camera.matrixWorldInverse.elements, P = camera.projectionMatrix.elements, cp = camera.position;
+    const L = [0.3, -0.5, 1.0], ll = Math.hypot(...L); L[0] /= ll; L[1] /= ll; L[2] /= ll;
+    const under = [], back = [], front = [], col = new THREE.Color();
+    scene.traverseVisible((o) => {
+      if (!o.isMesh) return;
+      const t = this.tris(o.geometry), m = o.matrixWorld.elements, mat = o.material, top = mat.depthTest === false;
+      const a = mat.transparent ? mat.opacity : 1, out = top ? front : (o.userData.under ? under : back), w = [0, 0, 0, 0, 0, 0, 0, 0, 0], s = [0, 0, 0, 0, 0, 0];
+      for (let i = 0; i < t.length; i += 9) {
+        let behind = false, depth = 0;
+        for (let j = 0; j < 3; j++) {
+          const x = t[i + 3 * j], y = t[i + 3 * j + 1], z = t[i + 3 * j + 2];
+          const X = m[0] * x + m[4] * y + m[8] * z + m[12], Y = m[1] * x + m[5] * y + m[9] * z + m[13], Z = m[2] * x + m[6] * y + m[10] * z + m[14];
+          w[3 * j] = X; w[3 * j + 1] = Y; w[3 * j + 2] = Z;
+          const vx = v[0] * X + v[4] * Y + v[8] * Z + v[12], vy = v[1] * X + v[5] * Y + v[9] * Z + v[13], vz = v[2] * X + v[6] * Y + v[10] * Z + v[14];
+          if (vz > -camera.near) { behind = true; break; }
+          const cx = P[0] * vx + P[8] * vz, cy = P[5] * vy + P[9] * vz, cw = -vz;
+          s[2 * j] = (cx / cw + 1) * 0.5 * W; s[2 * j + 1] = (1 - cy / cw) * 0.5 * H; depth += cw;
+        }
+        if (behind) continue;
+        const ux = w[3] - w[0], uy = w[4] - w[1], uz = w[5] - w[2], qx = w[6] - w[0], qy = w[7] - w[1], qz = w[8] - w[2];
+        let nx = uy * qz - uz * qy, ny = uz * qx - ux * qz, nz = ux * qy - uy * qx; const nl = Math.hypot(nx, ny, nz) || 1;
+        nx /= nl; ny /= nl; nz /= nl;
+        if (!top && nx * (cp.x - w[0]) + ny * (cp.y - w[1]) + nz * (cp.z - w[2]) <= 0) continue;    // back face
+        const k = top ? 1 : 0.42 + 0.18 * (nz * 0.5 + 0.5) + 0.55 * Math.max(0, nx * L[0] + ny * L[1] + nz * L[2]);
+        col.copy(mat.color).multiplyScalar(k);
+        out.push({ d: depth, s: s.slice(), f: col.getStyle(), a });
+      }
+    });
+    under.sort((p, q) => q.d - p.d); back.sort((p, q) => q.d - p.d);
+    for (const q of [...under, ...back, ...front]) {   // the board surface first: nothing on it can sort behind it
+      ctx.globalAlpha = q.a; ctx.fillStyle = q.f; ctx.strokeStyle = q.f; ctx.lineWidth = 0.6;
+      ctx.beginPath(); ctx.moveTo(q.s[0], q.s[1]); ctx.lineTo(q.s[2], q.s[3]); ctx.lineTo(q.s[4], q.s[5]); ctx.closePath();
+      ctx.fill(); if (q.a === 1) ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+function webglRenderer() {
+  try {
+    const c = document.createElement('canvas');
+    if (!(c.getContext('webgl2') || c.getContext('webgl'))) return null;
+    const r = new THREE.WebGLRenderer({ antialias: true }); r.setPixelRatio(devicePixelRatio); return r;
+  } catch (e) { return null; }
+}
 const view = $('view');
-const renderer = new THREE.WebGLRenderer({ antialias: true }); renderer.setPixelRatio(devicePixelRatio);
+const renderer = webglRenderer() || new Canvas2DRenderer();
 view.prepend(renderer.domElement);
 const scene = new THREE.Scene(); scene.background = new THREE.Color('#15171c');
 scene.add(new THREE.HemisphereLight(0xffffff, 0x30343c, 1.1));
